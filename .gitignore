@@ -1,1 +1,17 @@
+# Binaries
+main
+
+# IDE and editor settings
 .idea
+.vscode
+*.swp
+
+# Logs and debug files
+*.log
+
+# Dependency directories
+/vendor/
+
+# OS-specific files
+.DS_Store
+Thumbs.db

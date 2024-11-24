@@ -1,0 +1,20 @@
+# Ignore vendor and local dependencies
+vendor
+*.log
+
+# Ignore git-related files
+.git
+.gitignore
+
+# Ignore OS files
+.DS_Store
+
+# Ignore editor and IDE-specific files
+.idea
+.vscode
+
+# Ignore build artifacts
+*.exe
+*.out
+*.o
+*.a
