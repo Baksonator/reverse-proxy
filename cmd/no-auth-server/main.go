@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -17,50 +16,39 @@ func main() {
 	serviceAddress := "127.0.0.1:8080"
 	proxyRegistrationEndpoint := "http://localhost:8081/register"
 
-	// Load TLS certificate and key
-	cert, err := tls.LoadX509KeyPair("cert.pem", "key.pem")
-	if err != nil {
-		log.Fatalf("Failed to load TLS certificate: %v", err)
-	}
-
 	// Register the backend with the proxy
-	err = registerWithProxy(proxyRegistrationEndpoint, serviceName, serviceAddress)
+	err := registerWithProxy(proxyRegistrationEndpoint, serviceName, serviceAddress)
 	if err != nil {
 		log.Fatalf("Failed to register with proxy: %v", err)
 	}
 	log.Printf("Backend registered: %s -> %s", serviceName, serviceAddress)
 
-	// Start the backend server
-	tlsConfig := &tls.Config{Certificates: []tls.Certificate{cert}}
-
-	listener, err := tls.Listen("tcp", serviceAddress, tlsConfig)
+	// Start listening for plaintext connections
+	listener, err := net.Listen("tcp", serviceAddress)
 	if err != nil {
-		log.Fatalf("Failed to start server: %v", err)
+		log.Fatalf("Failed to start backend server: %v", err)
 	}
 	defer listener.Close()
 
 	log.Printf("Backend server listening on %s", serviceAddress)
 
 	for {
+		// Accept a new connection
 		conn, err := listener.Accept()
 		if err != nil {
 			log.Printf("Failed to accept connection: %v", err)
 			continue
 		}
 
+		// Handle the connection
 		go handleConnection(conn)
 	}
 }
 
 func handleConnection(conn net.Conn) {
-	defer func(conn net.Conn) {
-		err := conn.Close()
-		if err != nil {
-			log.Printf("Failed to close connection: %v", err)
-		}
-	}(conn)
+	defer conn.Close()
 
-	// Read client message
+	// Read the client's message
 	buffer := make([]byte, 1024)
 	n, err := conn.Read(buffer)
 	if err != nil {
@@ -71,7 +59,7 @@ func handleConnection(conn net.Conn) {
 	log.Printf("Received message: %s", message)
 
 	// Send a response to the client
-	response := "Hello from backend!"
+	response := "Hello from plaintext backend!"
 	_, err = conn.Write([]byte(response))
 	if err != nil {
 		log.Printf("Failed to send response: %v", err)

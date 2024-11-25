@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,7 +13,10 @@ import (
 )
 
 type Config struct {
-	Backends sync.Map // Thread-safe map for backend name-to-address mapping
+	Backends       sync.Map // Thread-safe map for backend name-to-address mapping
+	TLSTermination bool     // Enable or disable TLS termination
+	CertFile       string   // Path to TLS certificate file (if termination enabled)
+	KeyFile        string   // Path to TLS private key file (if termination enabled)
 }
 
 // Proxy listens for incoming connections
@@ -32,8 +36,71 @@ func startProxy(address string, config *Config) error {
 			continue
 		}
 
-		go handleConnection(conn, config)
+		if config.TLSTermination {
+			go handleTLSTerminationConnection(conn, config)
+		} else {
+			go handleConnection(conn, config)
+		}
 	}
+}
+func handleTLSTerminationConnection(conn net.Conn, config *Config) {
+	defer conn.Close()
+
+	// Load TLS certificate and private key
+	cert, err := tls.LoadX509KeyPair(config.CertFile, config.KeyFile)
+	if err != nil {
+		log.Printf("Failed to load TLS certificate: %v", err)
+		return
+	}
+
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		GetCertificate: func(info *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			log.Printf("Received connection with SNI: %s", info.ServerName)
+			return &cert, nil
+		},
+	}
+
+	// Wrap the connection in TLS
+	tlsConn := tls.Server(conn, tlsConfig)
+	if err := tlsConn.Handshake(); err != nil {
+		log.Printf("TLS handshake failed: %v", err)
+		return
+	}
+	defer tlsConn.Close()
+
+	// Discover the backend for the given SNI
+	value, ok := config.Backends.Load(tlsConn.ConnectionState().ServerName)
+	if !ok {
+		log.Printf("No backend found for SNI: %s", tlsConn.ConnectionState().ServerName)
+		return
+	}
+	backendAddr := value.(string)
+
+	// Connect to the backend
+	backendConn, err := net.Dial("tcp", backendAddr)
+	if err != nil {
+		log.Printf("Failed to connect to backend: %v", err)
+		return
+	}
+	defer backendConn.Close()
+
+	// Forward traffic between the client (decrypted) and the backend (plaintext)
+	log.Printf("Forwarding plaintext traffic between client and backend (%s)", backendAddr)
+	done := make(chan struct{})
+
+	go func() {
+		_, _ = io.Copy(backendConn, tlsConn)
+		done <- struct{}{}
+	}()
+	go func() {
+		_, _ = io.Copy(tlsConn, backendConn)
+		done <- struct{}{}
+	}()
+
+	<-done
+	<-done
+	log.Printf("Connection closed for SNI: %s", tlsConn.ConnectionState().ServerName)
 }
 
 // Handle individual connections
@@ -284,7 +351,10 @@ func startRegistrationServer(config *Config, address string) {
 func main() {
 	// Initialize the proxy configuration
 	config := &Config{
-		Backends: sync.Map{},
+		Backends:       sync.Map{},
+		TLSTermination: true, // Set to false for end-to-end TLS
+		CertFile:       "cert.pem",
+		KeyFile:        "key.pem",
 	}
 
 	// Start the registration server
