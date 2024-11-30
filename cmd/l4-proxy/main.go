@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -14,9 +15,11 @@ import (
 
 type Config struct {
 	Backends       sync.Map // Thread-safe map for backend name-to-address mapping
+	BackendIndices sync.Map // Tracks the next backend to use for each SNI (round-robin)
 	TLSTermination bool     // Enable or disable TLS termination
 	CertFile       string   // Path to TLS certificate file (if termination enabled)
 	KeyFile        string   // Path to TLS private key file (if termination enabled)
+	Cache          sync.Map // A thread-safe cache for storing responses
 }
 
 // Proxy listens for incoming connections
@@ -69,13 +72,22 @@ func handleTLSTerminationConnection(conn net.Conn, config *Config) {
 	}
 	defer tlsConn.Close()
 
-	// Discover the backend for the given SNI
-	value, ok := config.Backends.Load(tlsConn.ConnectionState().ServerName)
-	if !ok {
-		log.Printf("No backend found for SNI: %s", tlsConn.ConnectionState().ServerName)
+	sni := tlsConn.ConnectionState().ServerName
+
+	// Check the cache for a response
+	cacheKey := fmt.Sprintf("tls:%s", sni)
+	if cachedResponse, found := getFromCache(config, cacheKey); found {
+		log.Printf("Cache hit for SNI: %s", sni)
+		handleCachedResponse(tlsConn, cachedResponse)
 		return
 	}
-	backendAddr := value.(string)
+
+	// Get the next backend using round-robin
+	backendAddr, err := getNextBackend(config, sni)
+	if err != nil {
+		log.Printf("No backend found for SNI: %s", sni)
+		return
+	}
 
 	// Connect to the backend
 	backendConn, err := net.Dial("tcp", backendAddr)
@@ -85,21 +97,27 @@ func handleTLSTerminationConnection(conn net.Conn, config *Config) {
 	}
 	defer backendConn.Close()
 
-	// Forward traffic between the client (decrypted) and the backend (plaintext)
+	// Forward traffic and cache the response
 	log.Printf("Forwarding plaintext traffic between client and backend (%s)", backendAddr)
+	responseBuffer := &bytes.Buffer{}
 	done := make(chan struct{})
+	teeReader := io.TeeReader(backendConn, responseBuffer)
 
 	go func() {
 		_, _ = io.Copy(backendConn, tlsConn)
 		done <- struct{}{}
 	}()
 	go func() {
-		_, _ = io.Copy(tlsConn, backendConn)
+		_, _ = io.Copy(tlsConn, teeReader)
 		done <- struct{}{}
 	}()
 
 	<-done
 	<-done
+
+	storeInCache(config, cacheKey, responseBuffer.Bytes())
+	log.Printf("Response cached for SNI: %s", sni)
+
 	log.Printf("Connection closed for SNI: %s", tlsConn.ConnectionState().ServerName)
 }
 
@@ -122,18 +140,42 @@ func handleConnection(conn net.Conn, config *Config) {
 		return
 	}
 
-	// Step 2: Discover the backend
-	value, ok := config.Backends.Load(serviceName)
-	if !ok {
+	// Get the next backend using round-robin
+	backendAddr, err := getNextBackend(config, serviceName)
+	if err != nil {
 		log.Printf("No backend found for SNI: %s", sni)
 		return
 	}
-	backendAddr := value.(string)
 
 	// Forward traffic
-	if err := forwardTraffic(bufferedConn, backendAddr); err != nil {
+	if err := forwardTraffic(bufferedConn, backendAddr, config); err != nil {
 		log.Printf("Failed to forward traffic: %v", err)
 	}
+}
+
+func handleCachedResponse(tlsConn *tls.Conn, cachedResponse []byte) {
+	writer := bufio.NewWriter(tlsConn)
+
+	// Write the cached response to the client
+	_, err := writer.Write(cachedResponse)
+	if err != nil {
+		log.Printf("Error writing cached response: %v", err)
+	}
+
+	// Gracefully close the connection after writing
+	err = writer.Flush()
+	if err != nil {
+		log.Printf("Error flushing cached response: %v", err)
+	}
+
+	// Signal the end of the write stream without closing the entire connection
+	err = tlsConn.CloseWrite()
+	if err != nil {
+		log.Printf("Error signaling write closure: %v", err)
+		return
+	}
+
+	log.Println("Cached response sent and connection closed")
 }
 
 func extractSNI(bufferedConn bufferedConn) (string, error) {
@@ -250,7 +292,7 @@ func parseSNI(sni string) (string, error) {
 }
 
 // Forward traffic to the backend service
-func forwardTraffic(conn net.Conn, backendAddr string) error {
+func forwardTraffic(conn net.Conn, backendAddr string, config *Config) error {
 	backendConn, err := net.Dial("tcp", backendAddr)
 	if err != nil {
 		return fmt.Errorf("failed to connect to backend: %w", err)
@@ -263,28 +305,21 @@ func forwardTraffic(conn net.Conn, backendAddr string) error {
 	// Client -> Backend
 	go func() {
 		log.Println("Starting client -> backend forwarding")
-		_, err := io.Copy(backendConn, conn)
-		if err != nil {
-			log.Printf("Error forwarding client to backend: %v", err)
-		}
-		log.Println("Finished client -> backend forwarding")
+		_, _ = io.Copy(backendConn, conn)
 		done <- struct{}{}
 	}()
 
 	// Backend -> Client
 	go func() {
 		log.Println("Starting backend -> client forwarding")
-		_, err := io.Copy(conn, backendConn)
-		if err != nil {
-			log.Printf("Error forwarding backend to client: %v", err)
-		}
-		log.Println("Finished backend -> client forwarding")
+		_, _ = io.Copy(conn, backendConn)
 		done <- struct{}{}
 	}()
 
 	// Wait for both directions to finish
 	<-done
 	<-done
+
 	log.Println("Handled connection")
 
 	return nil
@@ -336,7 +371,7 @@ func startRegistrationServer(config *Config, address string) {
 		}
 
 		// Register the backend
-		config.Backends.Store(registration.Name, registration.Address)
+		addBackend(config, registration.Name, registration.Address)
 		log.Printf("Registered backend: %s -> %s", registration.Name, registration.Address)
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, "Backend %s registered successfully", registration.Name)
@@ -348,13 +383,81 @@ func startRegistrationServer(config *Config, address string) {
 	}
 }
 
+func addBackend(config *Config, sni string, backend string) {
+	// Get the current list of backends for the SNI
+	value, _ := config.Backends.LoadOrStore(sni, &sync.Map{})
+	backends := value.(*sync.Map)
+
+	// Add the backend to the list
+	backends.Store(backend, true) // Use true as a placeholder value
+	log.Printf("Added backend %s for SNI: %s", backend, sni)
+}
+
+func removeBackend(config *Config, sni string, backend string) {
+	// Get the current list of backends for the SNI
+	value, ok := config.Backends.Load(sni)
+	if !ok {
+		log.Printf("No backends found for SNI: %s", sni)
+		return
+	}
+	backends := value.(*sync.Map)
+
+	// Remove the backend
+	backends.Delete(backend)
+	log.Printf("Removed backend %s for SNI: %s", backend, sni)
+}
+
+func getNextBackend(config *Config, sni string) (string, error) {
+	// Get the list of backends for the SNI
+	value, ok := config.Backends.Load(sni)
+	if !ok {
+		return "", fmt.Errorf("no backends available for SNI: %s", sni)
+	}
+	backends := value.(*sync.Map)
+
+	// Convert the map keys to a slice
+	var backendList []string
+	backends.Range(func(key, value any) bool {
+		backendList = append(backendList, key.(string))
+		return true
+	})
+
+	if len(backendList) == 0 {
+		return "", fmt.Errorf("no backends available for SNI: %s", sni)
+	}
+
+	// Get the current index for round-robin
+	indexValue, _ := config.BackendIndices.LoadOrStore(sni, 0)
+	index := indexValue.(int)
+
+	// Select the backend and update the index
+	backend := backendList[index]
+	config.BackendIndices.Store(sni, (index+1)%len(backendList))
+
+	return backend, nil
+}
+
+func getFromCache(config *Config, key string) ([]byte, bool) {
+	value, ok := config.Cache.Load(key)
+	if !ok {
+		return nil, false
+	}
+	return value.([]byte), true
+}
+
+func storeInCache(config *Config, key string, data []byte) {
+	config.Cache.Store(key, data)
+}
+
 func main() {
 	// Initialize the proxy configuration
 	config := &Config{
 		Backends:       sync.Map{},
-		TLSTermination: true, // Set to false for end-to-end TLS
+		BackendIndices: sync.Map{},
+		TLSTermination: false, // Set to false for end-to-end TLS
 		CertFile:       "cert.pem",
 		KeyFile:        "key.pem",
+		Cache:          sync.Map{},
 	}
 
 	// Start the registration server

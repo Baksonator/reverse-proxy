@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/tls"
-	"fmt"
 	"log"
 )
 
@@ -39,7 +38,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to send message: %v", err)
 	}
-	fmt.Println("Message sent to proxy:", message)
+	log.Println("Message sent to proxy:", message)
 
 	// Read the response from the backend
 	buffer := make([]byte, 1024)
@@ -47,5 +46,5 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to read response: %v", err)
 	}
-	fmt.Println("Response from backend:", string(buffer[:n]))
+	log.Println("Response from backend:", string(buffer[:n]))
 }
