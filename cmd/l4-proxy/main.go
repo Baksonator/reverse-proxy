@@ -181,10 +181,33 @@ func handleCachedResponse(tlsConn *tls.Conn, cachedResponse []byte) {
 func extractSNI(bufferedConn bufferedConn) (string, error) {
 	// Peek into the connection to read the TLS ClientHello without consuming the data
 	// Use a buffered reader to peek at the handshake
-	// Read enough data to cover the ClientHello message
-	buf, err := bufferedConn.Peek(253)
+	// Peek the initial bytes to determine the handshake length
+	initialPeek := 5 // Minimum size to read the TLS record header
+	buf, err := bufferedConn.Peek(initialPeek)
 	if err != nil {
-		return "", fmt.Errorf("failed to read TLS handshake: %w", err)
+		return "", fmt.Errorf("failed to read initial TLS handshake: %w", err)
+	}
+
+	// Verify this is a TLS handshake record
+	if len(buf) < initialPeek {
+		return "", fmt.Errorf("not enough data for TLS handshake")
+	}
+	if buf[0] != 0x16 { // Record type: Handshake
+		return "", fmt.Errorf("not a TLS handshake record")
+	}
+
+	// Extract the handshake length
+	handshakeLength := int(buf[3])<<8 | int(buf[4])
+	totalPeek := initialPeek + handshakeLength
+
+	// Peek the entire handshake message
+	buf, err = bufferedConn.Peek(totalPeek)
+	if err != nil {
+		return "", fmt.Errorf("failed to read full TLS handshake: %w", err)
+	}
+
+	if len(buf) < totalPeek {
+		return "", fmt.Errorf("not enough data for full TLS handshake")
 	}
 
 	// Parse the ClientHello to extract the SNI
@@ -197,15 +220,6 @@ func extractSNI(bufferedConn bufferedConn) (string, error) {
 }
 
 func parseTLSClientHello(data []byte) (string, error) {
-	if len(data) < 5 {
-		return "", fmt.Errorf("data too short for TLS handshake")
-	}
-
-	// Ensure this is a TLS Handshake record
-	if data[0] != 0x16 { // Record type: Handshake
-		return "", fmt.Errorf("not a TLS handshake")
-	}
-
 	// Ensure the protocol version is at least TLS 1.0
 	if data[1] != 0x03 || (data[2] != 0x01 && data[2] != 0x02 && data[2] != 0x03) {
 		return "", fmt.Errorf("unsupported TLS version")

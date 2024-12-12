@@ -13,7 +13,7 @@ import (
 
 func main() {
 	// Backend service name and address
-	serviceName := "example.com"
+	serviceName := "exampleexampleexample.com"
 	serviceAddress := "127.0.0.1:8080"
 	proxyRegistrationEndpoint := "http://localhost:8081/register"
 

@@ -10,7 +10,7 @@ func main() {
 	proxyAddress := "localhost:443"
 
 	// Target service name to include in SNI
-	targetService := "example.com"
+	targetService := "exampleexampleexample.com"
 
 	// TLS configuration
 	tlsConfig := &tls.Config{
