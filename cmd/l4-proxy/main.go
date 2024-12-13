@@ -10,8 +10,16 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"runtime"
 	"sync"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/shirou/gopsutil/cpu"
 )
+
+import _ "net/http/pprof"
 
 type Config struct {
 	Backends       sync.Map // Thread-safe map for backend name-to-address mapping
@@ -20,6 +28,62 @@ type Config struct {
 	CertFile       string   // Path to TLS certificate file (if termination enabled)
 	KeyFile        string   // Path to TLS private key file (if termination enabled)
 	Cache          sync.Map // A thread-safe cache for storing responses
+}
+
+// Metrics for Prometheus
+var (
+	activeConnections = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "proxy_active_connections",
+		Help: "Number of active connections being handled by the proxy.",
+	})
+	totalRequests = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "proxy_total_requests",
+		Help: "Total number of requests processed by the proxy.",
+	})
+	requestErrors = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "proxy_request_errors",
+		Help: "Total number of request errors encountered by the proxy.",
+	})
+	requestLatency = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "proxy_request_latency_seconds",
+		Help:    "Histogram of request latency in seconds.",
+		Buckets: prometheus.DefBuckets,
+	})
+)
+
+var (
+	cpuUsage = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "proxy_cpu_usage_seconds_total",
+		Help: "Total CPU time used by the proxy process in seconds.",
+	})
+	memoryUsage = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "proxy_memory_usage_bytes",
+		Help: "Memory usage of the proxy process in bytes.",
+	})
+	goroutines = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "proxy_goroutines",
+		Help: "Number of goroutines currently running.",
+	})
+)
+
+var (
+	cpuUsageMetric = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "cpu_usage_percent",
+		Help: "Current CPU usage as a percentage.",
+	})
+)
+
+func getCPUUsage() (float64, error) {
+	percentages, err := cpu.Percent(0, false) // Get overall CPU usage
+	if err != nil || len(percentages) <= 0 {
+		return 0, err
+	}
+	return percentages[0], nil
+}
+
+func init() {
+	// Register metrics with Prometheus
+	prometheus.MustRegister(activeConnections, totalRequests, requestErrors, requestLatency, cpuUsage, cpuUsageMetric, memoryUsage, goroutines)
 }
 
 // Proxy listens for incoming connections
@@ -39,11 +103,27 @@ func startProxy(address string, config *Config) error {
 			continue
 		}
 
-		if config.TLSTermination {
-			go handleTLSTerminationConnection(conn, config)
-		} else {
-			go handleConnection(conn, config)
-		}
+		activeConnections.Inc()
+
+		go func() {
+			defer activeConnections.Dec() // Decrement on completion
+			startTime := time.Now()
+			totalRequests.Inc() // Increment total requests
+
+			cpuUsageCurr, err := getCPUUsage()
+			if err == nil {
+				cpuUsageMetric.Set(cpuUsageCurr)
+			}
+
+			if config.TLSTermination {
+				handleTLSTerminationConnection(conn, config)
+			} else {
+				handleConnection(conn, config)
+			}
+
+			duration := time.Since(startTime).Milliseconds()
+			requestLatency.Observe(float64(duration))
+		}()
 	}
 }
 func handleTLSTerminationConnection(conn net.Conn, config *Config) {
@@ -463,16 +543,49 @@ func storeInCache(config *Config, key string, data []byte) {
 	config.Cache.Store(key, data)
 }
 
+func collectProfilingMetrics() {
+	var memStats runtime.MemStats
+
+	for {
+		// Capture CPU usage
+		cpuUsage.Set(float64(runtime.NumCPU())) // Placeholder for per-core CPU stats
+
+		// Capture memory usage
+		runtime.ReadMemStats(&memStats)
+		memoryUsage.Set(float64(memStats.Alloc))
+
+		// Goroutine count
+		goroutines.Set(float64(runtime.NumGoroutine()))
+
+		time.Sleep(5 * time.Second) // Adjust sampling interval as needed
+	}
+}
+
+func startMetricsServer(metricsAddr string) {
+	http.Handle("/metrics", promhttp.Handler())
+	log.Printf("Metrics server listening on %s", metricsAddr)
+	log.Fatal(http.ListenAndServe(metricsAddr, nil))
+}
+
 func main() {
 	// Initialize the proxy configuration
 	config := &Config{
 		Backends:       sync.Map{},
 		BackendIndices: sync.Map{},
-		TLSTermination: false, // Set to false for end-to-end TLS
+		TLSTermination: true, // Set to false for end-to-end TLS
 		CertFile:       "cert.pem",
 		KeyFile:        "key.pem",
 		Cache:          sync.Map{},
 	}
+
+	go collectProfilingMetrics()
+
+	go func() {
+		log.Println("Starting pprof server on :6060")
+		log.Println(http.ListenAndServe(":6060", nil)) // Use default pprof routes
+	}()
+
+	go startMetricsServer(":9100")
 
 	// Start the registration server
 	go startRegistrationServer(config, ":8081") // Registration server on port 8081
