@@ -87,11 +87,11 @@ func main() {
 		wg.Add(1)
 		client := NewClient(i, &wg)
 		clients[i] = client
-		go client.Start(proxyAddress, "service"+strconv.FormatInt(int64(i%100+1), 10)+".com")
+		go client.Start(proxyAddress, "service"+strconv.FormatInt(int64(i%50+1), 10)+".com")
 	}
 
 	// Wait for some time (e.g., 10 seconds) to simulate workload
-	time.Sleep(100 * time.Second)
+	time.Sleep(600 * time.Second)
 
 	// Stop all clients
 	for _, client := range clients {

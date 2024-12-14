@@ -47,7 +47,7 @@ var (
 	requestLatency = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Name:    "proxy_request_latency_seconds",
 		Help:    "Histogram of request latency in seconds.",
-		Buckets: prometheus.DefBuckets,
+		Buckets: prometheus.LinearBuckets(0, 2, 10),
 	})
 )
 
@@ -74,7 +74,7 @@ var (
 )
 
 func getCPUUsage() (float64, error) {
-	percentages, err := cpu.Percent(0, false) // Get overall CPU usage
+	percentages, err := cpu.Percent(time.Second*15, false) // Get overall CPU usage
 	if err != nil || len(percentages) <= 0 {
 		return 0, err
 	}
@@ -107,13 +107,14 @@ func startProxy(address string, config *Config) error {
 
 		go func() {
 			defer activeConnections.Dec() // Decrement on completion
+
+			//cpuUsageCurr, err := getCPUUsage()
+			//if err == nil {
+			//	cpuUsageMetric.Set(cpuUsageCurr)
+			//}
+
 			startTime := time.Now()
 			totalRequests.Inc() // Increment total requests
-
-			cpuUsageCurr, err := getCPUUsage()
-			if err == nil {
-				cpuUsageMetric.Set(cpuUsageCurr)
-			}
 
 			if config.TLSTermination {
 				handleTLSTerminationConnection(conn, config)
@@ -561,6 +562,17 @@ func collectProfilingMetrics() {
 	}
 }
 
+func collectCPUMetrics() {
+	for {
+		cpuUsageCurr, err := getCPUUsage()
+		if err == nil {
+			cpuUsageMetric.Set(cpuUsageCurr)
+		}
+
+		//time.Sleep(15 * time.Second)
+	}
+}
+
 func startMetricsServer(metricsAddr string) {
 	http.Handle("/metrics", promhttp.Handler())
 	log.Printf("Metrics server listening on %s", metricsAddr)
@@ -572,11 +584,13 @@ func main() {
 	config := &Config{
 		Backends:       sync.Map{},
 		BackendIndices: sync.Map{},
-		TLSTermination: true, // Set to false for end-to-end TLS
+		TLSTermination: false, // Set to false for end-to-end TLS
 		CertFile:       "cert.pem",
 		KeyFile:        "key.pem",
 		Cache:          sync.Map{},
 	}
+
+	go collectCPUMetrics()
 
 	go collectProfilingMetrics()
 

@@ -39,7 +39,7 @@ var (
 	requestLatency = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Name:    "l7_proxy_request_latency_seconds",
 		Help:    "Histogram of request latency in seconds.",
-		Buckets: prometheus.DefBuckets,
+		Buckets: prometheus.LinearBuckets(0, 5, 60),
 	})
 )
 
@@ -66,7 +66,7 @@ var (
 )
 
 func getCPUUsage() (float64, error) {
-	percentages, err := cpu.Percent(0, false) // Get overall CPU usage
+	percentages, err := cpu.Percent(15, false) // Get overall CPU usage
 	if err != nil || len(percentages) <= 0 {
 		return 0, err
 	}
@@ -164,20 +164,15 @@ func handleHTTPRequest(w http.ResponseWriter, r *http.Request, config *Config) {
 	startTime := time.Now()
 	totalRequests.Inc() // Increment total requests
 
-	cpuUsageCurr, err := getCPUUsage()
-	if err == nil {
-		cpuUsageMetric.Set(cpuUsageCurr)
-	}
-
 	host := r.Host
 
-	// Check the cache
-	cacheKey := fmt.Sprintf("%s:%s", host, r.URL.String())
-	if cachedResponse, found := getFromCache(config, cacheKey); found {
-		log.Printf("Cache hit for %s", cacheKey)
-		w.Write(cachedResponse)
-		return
-	}
+	//// Check the cache
+	//cacheKey := fmt.Sprintf("%s:%s", host, r.URL.String())
+	//if cachedResponse, found := getFromCache(config, cacheKey); found {
+	//	log.Printf("Cache hit for %s", cacheKey)
+	//	w.Write(cachedResponse)
+	//	return
+	//}
 
 	// Get the next backend using round-robin
 	backendURL, err := getNextBackend(config, host)
@@ -215,7 +210,7 @@ func handleHTTPRequest(w http.ResponseWriter, r *http.Request, config *Config) {
 	}
 
 	// Cache the response
-	storeInCache(config, cacheKey, body)
+	//storeInCache(config, cacheKey, body)
 
 	// Write the response back to the client
 	for key, values := range resp.Header {
@@ -230,6 +225,17 @@ func handleHTTPRequest(w http.ResponseWriter, r *http.Request, config *Config) {
 
 	duration := time.Since(startTime).Milliseconds()
 	requestLatency.Observe(float64(duration))
+}
+
+func collectCPUMetrics() {
+	for {
+		cpuUsageCurr, err := getCPUUsage()
+		if err == nil {
+			cpuUsageMetric.Set(cpuUsageCurr)
+		}
+
+		//time.Sleep(15 * time.Second)
+	}
 }
 
 func addBackend(config *Config, host string, backend string) {
@@ -274,6 +280,8 @@ func main() {
 		TLSCertFile:    "cert.pem",
 		TLSKeyFile:     "key.pem",
 	}
+
+	go collectCPUMetrics()
 
 	go collectProfilingMetrics()
 

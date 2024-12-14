@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/tls"
 	"io"
 	"log"
@@ -43,13 +44,17 @@ func (c *Client) Start(proxyAddress, targetService string) {
 			log.Printf("Client %d stopping", c.id)
 			return
 		default:
-			req, err := http.NewRequest("GET", proxyAddress, nil)
+			bodyContent := "Hello from client!"
+			body := bytes.NewBufferString(bodyContent)
+
+			req, err := http.NewRequest("POST", proxyAddress, body)
 			if err != nil {
 				log.Fatalf("Failed to create request: %v", err)
 			}
 
 			// Set the Host header for routing
-			req.Host = targetService
+			//req.Host = targetService
+			req.Header.Set("Content-Type", "text/plain")
 
 			// Send a request to the proxy
 			resp, err := client.Do(req)
@@ -60,16 +65,17 @@ func (c *Client) Start(proxyAddress, targetService string) {
 			}
 
 			log.Printf("Client %d received response: %s", c.id, resp.Status)
-			resp.Body.Close()
 			// Read and display the response
-			body, err := io.ReadAll(resp.Body)
+			bodyResp, err := io.ReadAll(resp.Body)
 			if err != nil {
 				log.Printf("Failed to read response: %v", err)
 			}
 
-			log.Printf("Client %d received response body: %s", c.id, body)
+			log.Printf("Client %d received response body: %s", c.id, string(bodyResp))
 
-			time.Sleep(100 * time.Millisecond) // Simulate workload
+			resp.Body.Close()
+
+			time.Sleep(1 * time.Second)
 		}
 	}
 }
@@ -82,7 +88,7 @@ func (c *Client) Stop() {
 // Main function to spin up 1,000 clients
 func main() {
 	const numClients = 1000
-	const proxyAddress = "https://localhost:443" // Update to your proxy's actual address
+	const proxyAddress = "http://localhost:80/" // Update to your proxy's actual address
 
 	var wg sync.WaitGroup
 	clients := make([]*Client, numClients)
@@ -92,11 +98,11 @@ func main() {
 		wg.Add(1)
 		client := NewClient(i, &wg)
 		clients[i] = client
-		go client.Start(proxyAddress, "service"+strconv.FormatInt(int64(i%100+1), 10)+".com")
+		go client.Start(proxyAddress, "service"+strconv.FormatInt(int64(i%50+1), 10)+".com")
 	}
 
 	// Run the test for 30 seconds
-	time.Sleep(30 * time.Second)
+	time.Sleep(600 * time.Second)
 
 	// Stop all clients
 	for _, client := range clients {

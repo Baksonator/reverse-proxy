@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
-	"strconv"
 	"time"
 )
 
@@ -14,6 +14,10 @@ func startServer(port int) {
 	mux := http.NewServeMux() // Use a custom ServeMux
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Received request: %s %s", r.Method, r.URL.Path)
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			log.Printf("Received message: %s", string(body))
+		}
 		w.Header().Set("Content-Type", "text/plain")
 		fmt.Fprintf(w, "Hello from backend on port %d!", port)
 	})
@@ -57,15 +61,15 @@ func registerWithProxy(proxyURL, host, backend string) error {
 }
 
 func main() {
-	proxyRegistrationURL := "http://localhost:8081/register-backend" // Proxy registration endpoint // Hostname to register for
+	//proxyRegistrationURL := "http://localhost:8081/register-backend" // Proxy registration endpoint // Hostname to register for
 
 	// Run 10 servers concurrently
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 50; i++ {
 		port := 8082 + i
-		host := fmt.Sprintf("service%d.com", i+1)
-		go registerWithProxy(proxyRegistrationURL, host, "http://127.0.0.1:"+strconv.FormatInt(int64(port), 10))
+		//host := fmt.Sprintf("service%d.com", i+1)
+		//go registerWithProxy(proxyRegistrationURL, host, "http://127.0.0.1:"+strconv.FormatInt(int64(port), 10))
 		go startServer(port)
 	}
 
-	time.Sleep(40 * time.Second)
+	time.Sleep(630 * time.Second)
 }

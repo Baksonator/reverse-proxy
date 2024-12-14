@@ -129,7 +129,7 @@ func registerWithProxy(endpoint, name, address string) error {
 
 func main() {
 	const (
-		numServers                = 100
+		numServers                = 50
 		proxyRegistrationEndpoint = "http://localhost:8081/register"
 		certFile                  = "cert.pem"
 		keyFile                   = "key.pem"
@@ -151,7 +151,7 @@ func main() {
 	}
 
 	// Wait for some time (e.g., 10 seconds) to simulate workload
-	time.Sleep(120 * time.Second)
+	time.Sleep(630 * time.Second)
 
 	// Stop all servers
 	for _, server := range servers {
