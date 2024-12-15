@@ -71,5 +71,5 @@ func main() {
 		go startServer(port)
 	}
 
-	time.Sleep(630 * time.Second)
+	time.Sleep(210 * time.Second)
 }

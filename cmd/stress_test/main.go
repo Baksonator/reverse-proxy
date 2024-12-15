@@ -76,7 +76,7 @@ func (c *Client) Stop() {
 }
 
 func main() {
-	const numClients = 1000
+	const numClients = 10000
 	const proxyAddress = "127.0.0.1:443"
 
 	var wg sync.WaitGroup
@@ -91,7 +91,7 @@ func main() {
 	}
 
 	// Wait for some time (e.g., 10 seconds) to simulate workload
-	time.Sleep(600 * time.Second)
+	time.Sleep(180 * time.Second)
 
 	// Stop all clients
 	for _, client := range clients {

@@ -75,7 +75,7 @@ func (c *Client) Start(proxyAddress, targetService string) {
 
 			resp.Body.Close()
 
-			time.Sleep(1 * time.Second)
+			time.Sleep(500 * time.Millisecond)
 		}
 	}
 }
@@ -87,7 +87,7 @@ func (c *Client) Stop() {
 
 // Main function to spin up 1,000 clients
 func main() {
-	const numClients = 1000
+	const numClients = 5000
 	const proxyAddress = "http://localhost:80/" // Update to your proxy's actual address
 
 	var wg sync.WaitGroup
@@ -102,7 +102,7 @@ func main() {
 	}
 
 	// Run the test for 30 seconds
-	time.Sleep(600 * time.Second)
+	time.Sleep(180 * time.Second)
 
 	// Stop all clients
 	for _, client := range clients {

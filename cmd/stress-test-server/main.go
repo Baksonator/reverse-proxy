@@ -160,7 +160,7 @@ func main() {
 	}
 
 	// Wait for some time (e.g., 10 seconds) to simulate workload
-	time.Sleep(630 * time.Second)
+	time.Sleep(210 * time.Second)
 
 	// Stop all servers
 	for _, server := range servers {

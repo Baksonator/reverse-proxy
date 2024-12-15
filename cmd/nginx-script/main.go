@@ -18,7 +18,7 @@ type Record struct {
 
 func main() {
 	// Open the file
-	file, err := os.Open("C:\\Users\\bbaka\\AppData\\Local\\Docker\\json_access.log")
+	file, err := os.Open("C:\\Users\\bbaka\\AppData\\Local\\Docker\\json_access2.log")
 	if err != nil {
 		log.Fatalf("Failed to open file: %v", err)
 	}
@@ -40,7 +40,7 @@ func main() {
 		}
 
 		// Filter for "POST" request_method
-		if record.RequestMethod != "POST" || record.RequestTime == "60.000" || record.RequestTime == "60.001" || record.RequestTime == "59.999" || record.RequestTime == "60.003" {
+		if record.RequestMethod != "POST" || record.RequestTime >= "60.000" || record.RequestTime == "60.001" || record.RequestTime == "59.999" || record.RequestTime >= "60.003" {
 			continue
 		}
 
